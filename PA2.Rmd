@@ -1,0 +1,169 @@
+---
+title: 'Health and Economic Impacts of Severe Weather Events'
+author: "Justin Alford"
+date: "November 23, 2014"
+toc: true
+output: html_document
+keep_md: true
+---
+
+# Synopsis
+
+blah blah blah
+
+# Data Processing
+
+Before we begin our analysis, we need to read in and process the NOAA storm data.
+
+Load the packages that will be required in the analysis
+```{r loadPackages}
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+```
+
+## Load the NOAA Storm Data
+Downland the storm dataset and load it into an object named "stormRaw".
+
+```{r loadData, results = "asis", cache= TRUE, echo=TRUE}
+## Check to see if the zip file has already been downloaded to the working directory
+## if so, move on, if not, warn the user that the download is going to occur and execute
+    if(!file.exists("./storm.zip")){
+        print("Dataset not found. Downloading from internet. This may take a while.")
+        desturl<- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+        download.file(desturl,"./storm.zip", "curl")
+    }
+
+# Read the .csv into the storm object
+# This may take a few minutes...
+stormRaw <- read.csv("./storm.zip", header = TRUE, stringsAsFactors = FALSE)
+```
+
+## Subset the Data
+According to the NOAA National Climate Data Center website (http://www.ncdc.noaa.gov/stormevents/details.jsp), until 1996 only Tornado, Thunderstorm Wind, and Hail related weather events were tracked in the Storm Events Database. Therefore, in order to provide more relevant and up to date information to government officials, we will concentrate our analysis on only those events that began between January 1, 1996 and November 30, 2011 (which is the date of the last event in this dataset).
+
+In addition, for the purposes of our analysis,we are only going to leverage the following data columns from the original dataset:
+
+- EVTYPE: The type of weather event
+- FATALITIES: The number of fatalities attributed to the event
+- INJURIES: The number of injuries attributed to the event
+- PROPDMG: Estimated property damage, as dollars
+- PROPDMGEXP: Codes signifying the magnitude of property damage (e.g., "K" for thousands)
+- CROPDMG: Estimated crop damage, as dollars
+- CROPDMGEXP: Codes signifying the magnitude of property damage (e.g., "K" for thousands)
+
+As we subset the data to remove events before 1996, we will also reduce the dataset to just the columns we need.
+
+```{r recentStorms, cache= TRUE}
+## restrict to just records starting in 1996 on onwards and reduce the columns
+storm <- stormRaw[strptime(stormRaw$BGN_DATE, "%m/%d/%Y") >= "1996-01-01 EST",]
+storm <- storm[,c("EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", 
+                  "PROPDMGEXP", "CROPDMG", "CROPDMGEXP")]
+```
+
+## Data Cleansing
+Now that are dataset only contains events from 1996 - 2011, we can begin looking at the data to see if any of the information we are going to use in our analysis is problemmatic.
+
+Looking at the EVTYPE data column, there are many different variations of event types listed that are very similar to each other, are misspelled, or have different cases (UPPER vs. lower). We will attempt to harmonize the event types by focusing just on the most common events, in this case the events that account for 90% of the occurences in the dataset.
+
+First we need to determine where we will cut off our analysis by getting counts of each of the current event types.
+
+```{r eventCount}
+# Get the counts by EVTYPE then find the 95th percentile
+storm$EVTYPE <- toupper(storm$EVTYPE)
+eventCount <- ddply(storm,.(EVTYPE), summarize, EVCOUNT = length(EVTYPE))
+eventCount <- eventCount[order(eventCount$EVCOUNT, decreasing = TRUE),]
+eventCountPcnt <- as.integer(quantile(eventCount$EVCOUNT, .90))
+```
+Since 90% of the events in the dataset fall within those that have at least `r eventCountPcnt` occurrences, we will cut off the events at that point and only cleanse those events with at least that many occurrences.
+
+```{r getEvents}
+freqEvents <- eventCount$EVTYPE[eventCount$EVCOUNT >= eventCountPcnt]
+freqEvents
+```
+
+While extensive analysis could be done to produce a much more clean dataset, we will update and leverage the most frequent events and update the "types" by key words. For example, any event with "THUNDERSTORM" in the name, we will simply track as "THUNDERSTORM", even if the event is "THUNDERSTORM WIND". 
+
+```{r fixEVTYPE}
+# Approximate common event types based on their names, ignoring case and setting all to UPPER
+# Create new column to hold updated Event Type names
+storm$newEVTYPE <- toupper(storm$EVTYPE)
+storm$newEVTYPE[grepl("TSTM", storm$newEVTYPE)] <- "THUNDERSTORM"
+storm$newEVTYPE[grepl("THUNDERSTORM*", storm$newEVTYPE)] <- "THUNDERSTORM"
+storm$newEVTYPE[grepl("FLOOD", storm$newEVTYPE)] <- "FLOOD"
+storm$newEVTYPE[grepl("SNOW", storm$newEVTYPE)] <- "SNOW"
+storm$newEVTYPE[grepl("COLD", storm$newEVTYPE)] <- "COLD"
+storm$newEVTYPE[grepl("WIND", storm$newEVTYPE)] <- "WIND"
+storm$newEVTYPE[grepl("HAIL", storm$newEVTYPE)] <- "HAIL"
+storm$newEVTYPE[grepl("FIRE", storm$newEVTYPE)] <- "FIRE"
+```
+
+## Preparing Data for Population Health Analysis
+
+We will create datasets tailored to population health analysis which focus on the event and how many fatalities or injuries occurred as a result.
+
+```{r stormHealth, cache = TRUE}
+# Subset the storm dataset
+dfHealth <- storm[,c("newEVTYPE", "FATALITIES", "INJURIES")]
+
+# Get counts of Fatalities and Injuries by Event Type
+eventHealth <- ddply(dfHealth, .(newEVTYPE), colwise(sum))
+eventHealth <- ddply(eventHealth, .(newEVTYPE), transform, TOTAL = FATALITIES + INJURIES)
+eventHealth <- merge(eventHealth, ddply(dfHealth, .(newEVTYPE), summarize, FREQ = length(newEVTYPE)), by = "newEVTYPE")
+eventHealth <- eventHealth[order(eventHealth$TOTAL, decreasing = TRUE),]
+
+# Get mean Fatalities and Injuries by Event Type
+eventHealthMean <- ddply(dfHealth, .(newEVTYPE), colwise(mean))
+eventHealthMean <- ddply(eventHealthMean, .(newEVTYPE), transform, TOTAL = FATALITIES + INJURIES)
+eventHealthMean <- eventHealthMean[order(eventHealthMean$TOTAL, decreasing = TRUE),]
+```
+
+## Preparing Data for Economic Consequences Analysis
+
+We will create datasets tailored to economic consequences analysis which focus on the event and the estimated property and crop damage it caused.
+
+In order to correctly estimate the damage (in dollars) to property and crops, we need to convert the codes in the PROPDMGEXP and CROPDMGEXP columns to their numeric equivalents. The codes "H", "K", "M", and "B" signify hundreds, thousands, millions, and billions respectively. For any bad data found, we will carry the value as zero (O) so as not to make any false assumptions.
+
+```{r stormDamage, cache= TRUE}
+# Create subset of storm data
+dfDamage <- storm[,c("newEVTYPE", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP")]
+
+# Property Damage Multipliers
+dfDamage$propMult[toupper(dfDamage$PROPDMGEXP) == "H"] <- 10^2
+dfDamage$propMult[toupper(dfDamage$PROPDMGEXP) == "K"] <- 10^3
+dfDamage$propMult[toupper(dfDamage$PROPDMGEXP) == "M"] <- 10^6
+dfDamage$propMult[toupper(dfDamage$PROPDMGEXP) == "B"] <- 10^9
+# else set to multiplier to zero
+dfDamage$propMult[is.na(dfDamage$propMult)] <- 0
+
+# Crop Damage Multiplier
+dfDamage$cropMult[toupper(dfDamage$CROPDMGEXP) == "K"] <- 10^3
+dfDamage$cropMult[toupper(dfDamage$CROPDMGEXP) == "M"] <- 10^6
+dfDamage$cropMult[toupper(dfDamage$CROPDMGEXP) == "B"] <- 10^9
+# else set to zero dollars
+dfDamage$cropMult[is.na(dfDamage$cropMult)] <- 0 
+
+# now calc damage
+dfDamage$totPropDmg <- dfDamage$PROPDMG * dfDamage$propMult
+dfDamage$totCropDmg <- dfDamage$CROPDMG * dfDamage$cropMult
+dfDamage$totDmg <- dfDamage$totPropDmg + dfDamage$totCropDmg
+eventDamage <- ddply(dfDamage[,c("newEVTYPE","totPropDmg","totCropDmg","totDmg")], .(newEVTYPE), colwise(sum))
+
+eventDamageMean <- ddply(dfDamage[,c("newEVTYPE","totPropDmg","totCropDmg","totDmg")], .(newEVTYPE), colwise(mean))
+```
+
+
+
+we can begin to look at the impact of severe weather events during this time period in terms of population health (fatalities and injuries) and economic consequences (property and crop damage).
+
+### Analyzing the Storm Data for Population Health Impacts
+
+For the purposes of this analysis, there is no distinction or value weighting made to differentiate between a fatality or injury that occurred as a result of the weather events captured in this dataset. 
+
+# Results
+
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+2. Across the United States, which types of events have the greatest economic consequences?
