@@ -2,21 +2,28 @@
 title: 'Health and Economic Impacts of Severe Weather Events'
 author: "Justin Alford"
 date: "November 23, 2014"
-toc: true
 output: html_document
 keep_md: true
 ---
 
 # Synopsis
 
-blah blah blah
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern. The analysis below involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database which tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+The analysis aims to answer two key questions:
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+2. Across the United States, which types of events have the greatest economic consequences?
+
+After determining the types of events that most impact population health and cause the most economic consequences, the conclusion of the analysis is that -- all things being equal in terms of abilities to prevent or curtail the impact to the population, property, and crops -- that goverments would find the most benefit in spending resources to address flooding in their communities.
 
 # Data Processing
 
 Before we begin our analysis, we need to read in and process the NOAA storm data.
 
 Load the packages that will be required in the analysis
-```{r loadPackages}
+```{r loadPackages, results='hide'}
 library(plyr)
 library(dplyr)
 library(ggplot2)
@@ -45,13 +52,13 @@ According to the NOAA National Climate Data Center website (http://www.ncdc.noaa
 
 In addition, for the purposes of our analysis,we are only going to leverage the following data columns from the original dataset:
 
-- EVTYPE: The type of weather event
-- FATALITIES: The number of fatalities attributed to the event
-- INJURIES: The number of injuries attributed to the event
-- PROPDMG: Estimated property damage, as dollars
-- PROPDMGEXP: Codes signifying the magnitude of property damage (e.g., "K" for thousands)
-- CROPDMG: Estimated crop damage, as dollars
-- CROPDMGEXP: Codes signifying the magnitude of property damage (e.g., "K" for thousands)
+- **EVTYPE:** The type of weather event
+- **FATALITIES:** The number of fatalities attributed to the event
+- **INJURIES:** The number of injuries attributed to the event
+- **PROPDMG:** Estimated property damage, as dollars
+- **PROPDMGEXP:** Codes signifying the magnitude of property damage (e.g., "K" for thousands)
+- **CROPDMG:** Estimated crop damage, as dollars
+- **CROPDMGEXP:** Codes signifying the magnitude of property damage (e.g., "K" for thousands)
 
 As we subset the data to remove events before 1996, we will also reduce the dataset to just the columns we need.
 
@@ -75,15 +82,16 @@ storm$EVTYPE <- toupper(storm$EVTYPE)
 eventCount <- ddply(storm,.(EVTYPE), summarize, EVCOUNT = length(EVTYPE))
 eventCount <- eventCount[order(eventCount$EVCOUNT, decreasing = TRUE),]
 eventCountPcnt <- as.integer(quantile(eventCount$EVCOUNT, .90))
+eventCountPcnt
 ```
 Since 90% of the events in the dataset fall within those that have at least `r eventCountPcnt` occurrences, we will cut off the events at that point and only cleanse those events with at least that many occurrences.
 
 ```{r getEvents}
-freqEvents <- eventCount$EVTYPE[eventCount$EVCOUNT >= eventCountPcnt]
+freqEvents <- eventCount[eventCount$EVCOUNT >= eventCountPcnt, c("EVTYPE", "EVCOUNT")]
 freqEvents
 ```
 
-While extensive analysis could be done to produce a much more clean dataset, we will update and leverage the most frequent events and update the "types" by key words. For example, any event with "THUNDERSTORM" in the name, we will simply track as "THUNDERSTORM", even if the event is "THUNDERSTORM WIND". 
+While extensive analysis could be done to produce a cleaner dataset for all event types, we will just update and leverage the most frequent events and update the "types" by key words. For example, any event with "THUNDERSTORM" in the name, we will simply track as "THUNDERSTORM", even if the event is "THUNDERSTORM WIND". 
 
 ```{r fixEVTYPE}
 # Approximate common event types based on their names, ignoring case and setting all to UPPER
@@ -97,11 +105,13 @@ storm$newEVTYPE[grepl("COLD", storm$newEVTYPE)] <- "COLD"
 storm$newEVTYPE[grepl("WIND", storm$newEVTYPE)] <- "WIND"
 storm$newEVTYPE[grepl("HAIL", storm$newEVTYPE)] <- "HAIL"
 storm$newEVTYPE[grepl("FIRE", storm$newEVTYPE)] <- "FIRE"
+storm$newEVTYPE[grepl("HEAT", storm$newEVTYPE)] <- "HEAT"
+storm$newEVTYPE[grepl("RAIN", storm$newEVTYPE)] <- "RAIN"
 ```
 
 ## Preparing Data for Population Health Analysis
 
-We will create datasets tailored to population health analysis which focus on the event and how many fatalities or injuries occurred as a result.
+We will create datasets tailored to population health analysis which focus on the events and how many fatalities or injuries occurred as a result. For the purposes of this analysis, there is no distinction or value weighting made to differentiate between a fatality or injury that occurred as a result of the weather events captured in this dataset. 
 
 ```{r stormHealth, cache = TRUE}
 # Subset the storm dataset
@@ -121,7 +131,7 @@ eventHealthMean <- eventHealthMean[order(eventHealthMean$TOTAL, decreasing = TRU
 
 ## Preparing Data for Economic Consequences Analysis
 
-We will create datasets tailored to economic consequences analysis which focus on the event and the estimated property and crop damage it caused.
+We will also create datasets tailored to economic consequences analysis which focus on the event and the estimated property and crop damage it caused.
 
 In order to correctly estimate the damage (in dollars) to property and crops, we need to convert the codes in the PROPDMGEXP and CROPDMGEXP columns to their numeric equivalents. The codes "H", "K", "M", and "B" signify hundreds, thousands, millions, and billions respectively. For any bad data found, we will carry the value as zero (O) so as not to make any false assumptions.
 
@@ -144,26 +154,83 @@ dfDamage$cropMult[toupper(dfDamage$CROPDMGEXP) == "B"] <- 10^9
 # else set to zero dollars
 dfDamage$cropMult[is.na(dfDamage$cropMult)] <- 0 
 
-# now calc damage
+# Calculate Total Damage
 dfDamage$totPropDmg <- dfDamage$PROPDMG * dfDamage$propMult
 dfDamage$totCropDmg <- dfDamage$CROPDMG * dfDamage$cropMult
 dfDamage$totDmg <- dfDamage$totPropDmg + dfDamage$totCropDmg
 eventDamage <- ddply(dfDamage[,c("newEVTYPE","totPropDmg","totCropDmg","totDmg")], .(newEVTYPE), colwise(sum))
-
+eventDamage <- eventDamage[order(eventDamage$totDmg, decreasing = TRUE),]
 eventDamageMean <- ddply(dfDamage[,c("newEVTYPE","totPropDmg","totCropDmg","totDmg")], .(newEVTYPE), colwise(mean))
 ```
 
-
-
-we can begin to look at the impact of severe weather events during this time period in terms of population health (fatalities and injuries) and economic consequences (property and crop damage).
-
-### Analyzing the Storm Data for Population Health Impacts
-
-For the purposes of this analysis, there is no distinction or value weighting made to differentiate between a fatality or injury that occurred as a result of the weather events captured in this dataset. 
-
 # Results
 
+Now that we have prepared the data, we want to be able to answer 2 questions about the severe weather events in this NOAA Database.
 
 1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
 
 2. Across the United States, which types of events have the greatest economic consequences?
+
+## Storm Events Most Harmful with Respect to Population Health
+
+For the purposes of this analysis, we are defining effects to population health as occurrences of fatalities or injuries as a result of a severe weather event.
+
+To answer this question we will look at the top 10 events in terms of total fatalities and injuries as well as the mean number of fatalities and injuries per event.
+
+The top 10 events for total fatalities and injures are:
+```{r, comment=NA, tidy=TRUE}
+head(eventHealth,10)
+```
+
+Graphing the top ten by total fatalities and total injuries helps to hightlight which events pose the most health risks.
+
+```{r total-fatality-injury-graph, fig.height=8, fig.width=12}
+ggplot(eventHealth[1:10,], aes(x=FATALITIES, y=INJURIES, color=newEVTYPE)) +
+        geom_point(aes(size = TOTAL)) +
+        ggtitle("Weather Event Types Most Harmful to Population Health") +
+        scale_size_area(max_size=15)
+```
+
+Based on the graph, it is clear Tornados, Heat, and Floods have the largest overall population health impacts since 1996 with Tornados clearly showing the highest impact in terms of both fatalities and injuries.
+
+In addition to looking at the top event types in terms of total fatalities and injuries, it is also worth looking at which events have the highest average number of fatalities and injuries to see whether the events match or whether there are certain events which may not occur as often but can cause large health effects (on average) when they do. 
+
+The top 10 event types by the mean fatalities and injuries are:
+
+```{r}
+head(eventHealthMean[order(eventHealthMean$FATALITIES, decreasing = TRUE),],10)
+```
+
+The top 10 event types by the mean fatalities and injuries are:
+
+```{r}
+head(eventHealthMean[order(eventHealthMean$INJURIES, decreasing = TRUE),],10)
+```
+Interestingly, many of the events with the top total fatalities and injuries are not present when looking at the top events in terms of mean fatalities and injuries. And in both mean fatalities and mean injuries, a large proportion of the event types are heat or marine related and largely do not account for the top event types in terms of total population health impacts.
+
+Based on this data governments would be wise to focus on education and precautionary measures around Tornados, Heat, and Floods to provide the greatest positive impacts to their population health.
+
+## Storm Events Most Harmful with Respect to Economic Consequences
+
+For the purposes of this analysis, we are defining economic consequences as the total property and crop damanage causesd by an event type.
+
+To answer this question we will look at the top 10 events in terms of total estimated property damage (in dollars) and crop damange (in dollars).
+
+The top 10 event types for total economic consequences are:
+
+```{r}
+head(eventDamage[order(eventDamage$totDmg, decreasing = TRUE),], 10)
+```
+
+```{r total-dmg-graph,fig.height=8, fig.width=12}
+ggplot(eventDamage[1:10,], aes(x=totPropDmg, y=totCropDmg, color=newEVTYPE)) +
+        geom_point(aes(size = totDmg)) +
+        ggtitle("Weather Event Types Causing Most Economic Damage") +
+        scale_size_area(max_size=15)
+```
+
+Based on this graph, there are two event types that appear to have the most economic impacts. The first is Drought which almost entirely affects crops, but the damage to crops by this event type far outweights all other event types. The second is Floods which account for half the amount of crop damage as well as the most property damage by far as well. 
+
+## Conclusion
+Given that Floods also show up in the top 3 in term of population health and is the #1 event type in terms of economic damage, there is a strong incentive for governments to look at ways to bolster their community and resources to address ways to combat this severe weather event type.
+
